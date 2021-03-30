@@ -1,0 +1,179 @@
+<?php
+
+namespace App\Http\Livewire;
+
+use App\Csv;
+use Livewire\Component;
+use App\Models\Guardian;
+use App\Models\Applicant;
+use Livewire\WithFileUploads;
+use Illuminate\Support\Facades\Validator;
+
+
+class ImportApplicant extends Component
+{
+    use WithFileUploads;
+
+    public $showModal = false;
+    public $upload;
+    public $columns;
+    
+    public $applicantInfo = [];
+    public $guardian1Info = [];
+    public $guardian2Info = [];
+
+    public $fieldColumnMap = [
+        'first' => '',
+        'last' => '',
+        'email' => '',
+        'dob' => '',
+        'applicant_type' => '',
+        'applicant_id' => '',
+        'guardian1_first' => '',
+        'guardian1_last' => '',
+        'guardian1_email' => '',
+        'guardian2_first' => '',
+        'guardian2_last' => '',
+        'guardian2_email' => '',
+    ];
+
+    protected $rules = [
+        'fieldColumnMap.first' => 'required',
+        'fieldColumnMap.last' => 'required',
+        'fieldColumnMap.email' => 'required',
+        'fieldColumnMap.dob' => 'required',
+        'fieldColumnMap.applicant_type' => 'required',
+    ];
+
+    protected $validationAttributes = [
+        'fieldColumnMap.first' => 'First name',
+        'fieldColumnMap.last' => 'Last name',
+        'fieldColumnMap.email' => 'Email',
+        'fieldColumnMap.dob' => 'Date of birth',
+        'fieldColumnMap.applicant_type' => 'Applicant type',
+    ];
+
+
+    public function updatingUpload($value)
+    {
+        Validator::make(
+            ['upload' => $value],
+            ['upload' => 'required | mimes:txt,csv'],
+        )->validate();
+    }
+
+    public function updatedUpload()
+    {
+        $this->columns = Csv::from($this->upload)->columns();
+
+        $this->guessWhichColumnsMapToWhichFields();
+    }
+
+    public function import()
+    {
+        $this->validate();
+
+        $importCount = 0;
+
+        Csv::from($this->upload)
+            ->eachRow(function ($row) use (&$importCount) {
+
+                $this->extractFieldsFromRow($row);
+            dd($row);
+                $applicant = Applicant::firstOrCreate($this->applicantInfo);
+
+                if($this->guardian1Info != null)
+                {
+                    $guardian1 = Guardian::firstOrCreate($this->guardian1Info);
+                }
+
+                if ($this->guardian2Info != null) 
+                {
+                    $guardian2 = Guardian::firstOrCreate($this->guardian2Info);
+                }
+
+                if ($guardian1 && !$applicant->guardians->contains($guardian1->id)) 
+                {
+                    $applicant->guardians()->attach($guardian1->id);
+                }
+
+                if ($guardian2 && !$applicant->guardians->contains($guardian2->id)) 
+                {
+                    $applicant->guardians()->attach($guardian2->id);
+                }
+
+                $importCount++;
+            });
+
+        $this->reset();
+
+        $this->emitUp('refreshApplicants');
+
+    }
+
+    public function extractFieldsFromRow($row)
+    {
+        $attributes = collect($this->fieldColumnMap)
+            ->filter()
+            ->mapWithKeys(function ($heading, $field) use ($row) {
+                return [$field => $row[$heading]];
+            })
+            ->toArray();
+            
+        foreach ($attributes as $key => $value) {
+
+            // Get applicant information
+            if (str_contains($key, 'applicant') || $key == 'first' || $key == 'last' || $key == 'email' || $key == 'dob') {
+
+                if ($key == 'applicant_type') {
+                    $value = intval($value);
+                }
+
+                $this->applicantInfo += [$key => $value];
+                $this->applicantInfo += ['status' => 1];
+            }
+
+            // Get guardian 1 information
+            if (str_contains($key, 'guardian1')) {
+
+                $key = ltrim($key, 'guardian1_');
+
+                $this->guardian1Info += [$key => $value];
+            }
+
+            // Get guardian 2 information
+            if (str_contains($key, 'guardian2')) {
+
+                $key = ltrim($key, 'guardian2_');
+
+                $this->guardian2Info += [$key => $value];
+            }
+        }
+
+    }
+
+    public function guessWhichColumnsMapToWhichFields()
+    {
+        $guesses = [
+            'first' => ['applicant_first_name'],
+            'last' => ['applicant_last_name'],
+            'email' => ['applicant_email'],
+            'dob' => ['applicant_dob'],
+            'applicant_type' => ['applicant_type'],
+            'applicant_id' => ['applicant_id'],
+            'guardian1_first' => ['guardian1_first_name'],
+            'guardian1_last' => ['guardian1_last_name'],
+            'guardian1_email' => ['guardian1_email'],
+            'guardian2_first' => ['guardian2_first_name'],
+            'guardian2_last' => ['guardian2_last_name'],
+            'guardian2_email' => ['guardian2_email'],
+        ];
+
+        foreach ($this->columns as $column) {
+            $match = collect($guesses)->search(fn ($options) => in_array(strtolower($column), $options));
+
+            if ($match) $this->fieldColumnMap[$match] = $column;
+        }
+    }
+
+}
